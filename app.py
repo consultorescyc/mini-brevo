@@ -128,6 +128,11 @@ def send_email_smtp(to_email: str, subject: str, body_html: str):
 
 # -------------- UI --------------------
 def page_contacts():
+    import re
+
+    def is_valid_email(s: str) -> bool:
+        return re.match(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", s or "") is not None
+
     st.header("👥 Contactos")
 
     # -------------------------------
@@ -147,6 +152,8 @@ def page_contacts():
             if submitted:
                 if not email:
                     st.error("El email es obligatorio.")
+                elif not is_valid_email(email):
+                    st.error("Formato de email no válido.")
                 else:
                     insert_contact(name, email, tags)
                     st.success(f"Contacto '{email}' guardado (o ya existía).")
@@ -163,30 +170,79 @@ def page_contacts():
     # -------------------------------
     st.subheader("📤 Importar desde CSV o TXT")
     st.caption("""
-    - CSV: columnas **email, name, tags** (obligatorio email).
-    - TXT: una de estas dos formas:
-        1. Solo correos, uno por línea.
-        2. email;name;tags (separados por `;`).
+- **CSV**: columnas `email`, `name`, `tags` (obligatorio `email`).
+- **TXT**: dos opciones:
+  1) `email;name;tags` (separados por `;`) — `name` y `tags` pueden ir vacíos.
+  2) Solo correos, separados por salto de línea, coma, espacio o `;`.
     """)
 
     file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
     if file:
         df = None
+        skipped = 0
+
         if file.name.endswith(".csv"):
             df = pd.read_csv(file)
+            # Normalizar nombres de columnas esperadas
+            cols_lower = {c.lower(): c for c in df.columns}
+            # Mapear si vienen en mayúsculas/otras variantes
+            email_col = cols_lower.get("email")
+            name_col = cols_lower.get("name")
+            tags_col = cols_lower.get("tags")
+            # Crear columnas faltantes
+            if email_col is None:
+                st.error("El CSV debe incluir una columna 'email'.")
+                return
+            if name_col is None:
+                df["name"] = ""
+                name_col = "name"
+            if tags_col is None:
+                df["tags"] = ""
+                tags_col = "tags"
+            # Dejar columnas con nombres estándar
+            df = df.rename(columns={email_col: "email", name_col: "name", tags_col: "tags"})
+
+            # Validar emails y limpiar
+            df["email"] = df["email"].astype(str).str.strip().str.lower()
+            mask_valid = df["email"].apply(is_valid_email)
+            skipped = int((~mask_valid).sum())
+            df = df[mask_valid].copy()
 
         elif file.name.endswith(".txt"):
+            text = file.read().decode("utf-8")
             rows = []
-            for linea in file.read().decode("utf-8").splitlines():
-                partes = [p.strip() for p in linea.split(";")]
-                if len(partes) == 1:
-                    rows.append({"email": partes[0], "name": "", "tags": ""})
-                elif len(partes) >= 2:
-                    rows.append({"email": partes[0], "name": partes[1], "tags": ";".join(partes[2:])})
-            df = pd.DataFrame(rows)
 
-        if df is not None:
-            st.dataframe(df.head(20))
+            # Procesar línea por línea
+            for ln in [l.strip() for l in text.splitlines() if l.strip()]:
+                if ";" in ln:
+                    # Formato estructurado: email;name;tags
+                    partes = [p.strip() for p in ln.split(";")]
+                    email = (partes[0] if len(partes) >= 1 else "").lower()
+                    name  = (partes[1] if len(partes) >= 2 else "")
+                    tags_ = ";".join(partes[2:]) if len(partes) >= 3 else ""
+                    rows.append({"email": email, "name": name, "tags": tags_})
+                else:
+                    # Formato libre: correos separados por coma/espacio/;
+                    tokens = re.split(r"[,\s;]+", ln)
+                    for tok in [t.strip().lower() for t in tokens if t.strip()]:
+                        rows.append({"email": tok, "name": "", "tags": ""})
+
+            df = pd.DataFrame(rows)
+            if not df.empty:
+                df["email"] = df["email"].astype(str).str.strip().str.lower()
+                mask_valid = df["email"].apply(is_valid_email)
+                skipped = int((~mask_valid).sum())
+                df = df[mask_valid].copy()
+
+            # Quitar duplicados por email conservando el primero
+            if not df.empty:
+                df = df.drop_duplicates(subset=["email"], keep="first")
+
+        # Mostrar y permitir importar
+        if df is not None and not df.empty:
+            st.dataframe(df.head(50), use_container_width=True)
+            if skipped > 0:
+                st.warning(f"Se omitieron {skipped} filas por email inválido.")
             if st.button("Importar contactos"):
                 count = bulk_import_contacts(df)
                 st.success(f"Importados {count} contactos.")
@@ -195,21 +251,24 @@ def page_contacts():
                         "SELECT * FROM contacts ORDER BY id DESC", conn
                     )
                 st.rerun()
+        else:
+            st.info("No se detectaron contactos válidos en el archivo.")
 
     st.divider()
 
     # -------------------------------
-    # 3) Listado de contactos con edición
+    # 3) Listado de contactos (editar + eliminar)
     # -------------------------------
     with get_conn() as conn:
         df_contacts = pd.read_sql_query("SELECT * FROM contacts ORDER BY id DESC", conn)
-        st.session_state["contacts_df"] = df_contacts
+    st.session_state["contacts_df"] = df_contacts
 
     st.subheader(f"📋 Listado de contactos ({len(df_contacts)})")
 
-    # Editable table
+    # --- Edición en tabla ---
+    st.caption("Puedes editar Email / Nombre / Etiquetas y luego guardar los cambios.")
     edited_df = st.data_editor(
-        df_contacts,
+        df_contacts[["id", "email", "name", "tags"]],
         hide_index=True,
         column_config={
             "id": st.column_config.Column("ID", disabled=True),
@@ -217,31 +276,85 @@ def page_contacts():
             "name": st.column_config.Column("Nombre"),
             "tags": st.column_config.Column("Etiquetas"),
         },
-        num_rows="dynamic",
+        num_rows="fixed",  # no permitir agregar filas desde el editor
         key="contacts_editor"
     )
 
-    # Detectar cambios y aplicar
-    if not edited_df.equals(df_contacts):
-        cambios = edited_df[edited_df != df_contacts]
+    if st.button("💾 Guardar cambios"):
+        updates = 0
+        errors = []
         with get_conn() as conn:
-            for i, row in edited_df.iterrows():
-                conn.execute(
-                    "UPDATE contacts SET email=?, name=?, tags=? WHERE id=?",
-                    (row["email"], row["name"], row["tags"], row["id"]),
-                )
+            cur = conn.cursor()
+            # comparar por ID y actualizar sólo lo que cambió
+            original = df_contacts.set_index("id")
+            for _, row in edited_df.iterrows():
+                rid = int(row["id"])
+                new_email = str(row["email"]).strip().lower()
+                new_name  = str(row["name"]).strip()
+                new_tags  = str(row["tags"]).strip()
+                # Validar email
+                if not is_valid_email(new_email):
+                    errors.append(f"ID {rid}: email inválido '{new_email}'")
+                    continue
+                # Ver si cambió algo
+                if (original.at[rid, "email"] != new_email or
+                    original.at[rid, "name"]  != new_name  or
+                    original.at[rid, "tags"]  != new_tags):
+                    try:
+                        cur.execute(
+                            "UPDATE contacts SET email=?, name=?, tags=? WHERE id=?",
+                            (new_email, new_name, new_tags, rid)
+                        )
+                        updates += 1
+                    except Exception as e:
+                        errors.append(f"ID {rid}: {e}")
             conn.commit()
-        st.success("✅ Contactos actualizados.")
+        if updates:
+            st.success(f"✅ {updates} contacto(s) actualizado(s).")
+        if errors:
+            st.error("⚠️ Errores:\n- " + "\n- ".join(errors))
         st.rerun()
 
-    # Botón eliminar fila por ID
-    delete_id = st.text_input("ID del contacto a eliminar")
-    if st.button("Eliminar contacto"):
-        if delete_id.isdigit():
+    st.divider()
+
+    # --- Eliminar: por ID ---
+    st.subheader("🗑️ Eliminar contactos")
+    colA, colB = st.columns([2, 1])
+    with colA:
+        delete_id = st.text_input("ID del contacto a eliminar", placeholder="Ej: 12")
+    with colB:
+        if st.button("Eliminar por ID"):
+            if delete_id.isdigit():
+                with get_conn() as conn:
+                    conn.execute("DELETE FROM contacts WHERE id=?", (int(delete_id),))
+                    conn.commit()
+                st.success(f"Contacto con ID {delete_id} eliminado.")
+                st.rerun()
+            else:
+                st.warning("Ingresa un ID numérico válido.")
+
+    # --- Eliminar: botón por fila (con buscador) ---
+    st.caption("También puedes eliminar por fila. Usa el buscador para filtrar.")
+    q = st.text_input("🔎 Buscar por email o nombre", "")
+    df_del = df_contacts.copy()
+    if q.strip():
+        ql = q.strip().lower()
+        df_del = df_del[
+            df_del["email"].str.lower().str.contains(ql) |
+            df_del["name"].fillna("").str.lower().str.contains(ql)
+        ]
+
+    for _, row in df_del.iterrows():
+        c1, c2, c3, c4, c5 = st.columns([3, 3, 3, 1, 1])
+        c1.write(row["name"] or "—")
+        c2.write(row["email"])
+        c3.write(row["tags"] or "—")
+        c4.write(f"ID: {row['id']}")
+        if c5.button("🗑️", key=f"del_row_{row['id']}"):
             with get_conn() as conn:
-                conn.execute("DELETE FROM contacts WHERE id=?", (int(delete_id),))
+                conn.execute("DELETE FROM contacts WHERE id=?", (row["id"],))
                 conn.commit()
-            st.success(f"Contacto con ID {delete_id} eliminado.")
+            st.success(f"Contacto {row['email']} eliminado.")
             st.rerun()
 
 
