@@ -162,58 +162,86 @@ def page_contacts():
     # 2) Importar contactos CSV o TXT
     # -------------------------------
     st.subheader("📤 Importar desde CSV o TXT")
-    st.caption("El archivo puede ser CSV (con columnas email, name, tags) "
-               "o TXT con correos separados por coma, punto y coma, espacio o salto de línea.")
+    st.caption("""
+    - CSV: columnas **email, name, tags** (obligatorio email).
+    - TXT: una de estas dos formas:
+        1. Solo correos, uno por línea.
+        2. email;name;tags (separados por `;`).
+    """)
 
     file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
     if file:
+        df = None
         if file.name.endswith(".csv"):
             df = pd.read_csv(file)
 
         elif file.name.endswith(".txt"):
-            import re
-            contenido = file.read().decode("utf-8")
-            contactos = re.split(r"[,\s;]+", contenido.strip())
-            contactos = [c.strip() for c in contactos if c.strip()]
-            contactos = list(dict.fromkeys(contactos))  # quitar duplicados
-            df = pd.DataFrame(contactos, columns=["email"])
-            df["name"] = ""
-            df["tags"] = ""
+            rows = []
+            for linea in file.read().decode("utf-8").splitlines():
+                partes = [p.strip() for p in linea.split(";")]
+                if len(partes) == 1:
+                    rows.append({"email": partes[0], "name": "", "tags": ""})
+                elif len(partes) >= 2:
+                    rows.append({"email": partes[0], "name": partes[1], "tags": ";".join(partes[2:])})
+            df = pd.DataFrame(rows)
 
-        st.dataframe(df.head(20))
-
-        if st.button("Importar contactos"):
-            count = bulk_import_contacts(df)
-            st.success(f"Importados {count} contactos.")
-            with get_conn() as conn:
-                st.session_state["contacts_df"] = pd.read_sql_query(
-                    "SELECT * FROM contacts ORDER BY id DESC", conn
-                )
-            st.rerun()
+        if df is not None:
+            st.dataframe(df.head(20))
+            if st.button("Importar contactos"):
+                count = bulk_import_contacts(df)
+                st.success(f"Importados {count} contactos.")
+                with get_conn() as conn:
+                    st.session_state["contacts_df"] = pd.read_sql_query(
+                        "SELECT * FROM contacts ORDER BY id DESC", conn
+                    )
+                st.rerun()
 
     st.divider()
 
     # -------------------------------
-    # 3) Listado de contactos + eliminar
+    # 3) Listado de contactos con edición
     # -------------------------------
-    df_contacts = st.session_state.get("contacts_df")
-    if df_contacts is None:
-        with get_conn() as conn:
-            df_contacts = pd.read_sql_query("SELECT * FROM contacts ORDER BY id DESC", conn)
-            st.session_state["contacts_df"] = df_contacts
+    with get_conn() as conn:
+        df_contacts = pd.read_sql_query("SELECT * FROM contacts ORDER BY id DESC", conn)
+        st.session_state["contacts_df"] = df_contacts
 
     st.subheader(f"📋 Listado de contactos ({len(df_contacts)})")
 
-    for _, row in df_contacts.iterrows():
-        col1, col2, col3, col4 = st.columns([3, 3, 3, 1])
-        col1.write(row["name"] if row["name"] else "—")
-        col2.write(row["email"])
-        col3.write(row["tags"] if row["tags"] else "—")
-        if col4.button("🗑️", key=f"del_{row['id']}"):
+    # Editable table
+    edited_df = st.data_editor(
+        df_contacts,
+        hide_index=True,
+        column_config={
+            "id": st.column_config.Column("ID", disabled=True),
+            "email": st.column_config.Column("Email"),
+            "name": st.column_config.Column("Nombre"),
+            "tags": st.column_config.Column("Etiquetas"),
+        },
+        num_rows="dynamic",
+        key="contacts_editor"
+    )
+
+    # Detectar cambios y aplicar
+    if not edited_df.equals(df_contacts):
+        cambios = edited_df[edited_df != df_contacts]
+        with get_conn() as conn:
+            for i, row in edited_df.iterrows():
+                conn.execute(
+                    "UPDATE contacts SET email=?, name=?, tags=? WHERE id=?",
+                    (row["email"], row["name"], row["tags"], row["id"]),
+                )
+            conn.commit()
+        st.success("✅ Contactos actualizados.")
+        st.rerun()
+
+    # Botón eliminar fila por ID
+    delete_id = st.text_input("ID del contacto a eliminar")
+    if st.button("Eliminar contacto"):
+        if delete_id.isdigit():
             with get_conn() as conn:
-                conn.execute("DELETE FROM contacts WHERE id=?", (row["id"],))
+                conn.execute("DELETE FROM contacts WHERE id=?", (int(delete_id),))
                 conn.commit()
-            st.success(f"Contacto {row['email']} eliminado.")
+            st.success(f"Contacto con ID {delete_id} eliminado.")
             st.rerun()
 
 
