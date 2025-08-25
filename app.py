@@ -152,7 +152,7 @@ def page_contacts():
                             "SELECT * FROM contacts ORDER BY id DESC", conn
                         )
 
-   st.divider()
+st.divider()
 st.subheader("📤 Importar desde CSV o TXT")
 st.caption("El archivo puede ser CSV (con columnas email, name, tags) o TXT con correos separados por coma, punto y coma, espacio o salto de línea.")
 file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
