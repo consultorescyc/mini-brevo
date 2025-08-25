@@ -128,8 +128,10 @@ def send_email_smtp(to_email: str, subject: str, body_html: str):
 
 # -------------- UI --------------------
 def page_contacts():
-    st.header("👥 Contactooooos")
-    with st.expander("➕ Agregar contacto individual"):
+    st.header("👥 Contactos")
+
+    # --- Agregar contacto individual ---
+    with st.expander("➕ Agregar contacto individual", expanded=True):
         with st.form("add_contact_form"):
             col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
@@ -152,51 +154,66 @@ def page_contacts():
                             "SELECT * FROM contacts ORDER BY id DESC", conn
                         )
 
-st.divider()
-st.subheader("📤 Importar desde CSV o TXT")
-st.caption("El archivo puede ser CSV (con columnas email, name, tags) o TXT con correos separados por coma, punto y coma, espacio o salto de línea.")
-file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
-if file:
-    if file.name.endswith(".csv"):
-        df = pd.read_csv(file)
+    st.divider()
 
-    elif file.name.endswith(".txt"):
-        import re
-        contenido = file.read().decode("utf-8")
+    # --- Listado de contactos ---
+    with get_conn() as conn:
+        df_contacts = pd.read_sql_query("SELECT * FROM contacts ORDER BY id DESC", conn)
+    st.session_state["contacts_df"] = df_contacts
 
-        # Dividir correos usando varias posibilidades
-        contactos = re.split(r"[,\s;]+", contenido.strip())
-        contactos = [c.strip() for c in contactos if c.strip()]
-        contactos = list(dict.fromkeys(contactos))  # quitar duplicados
+    st.subheader(f"📋 Listado de contactos ({len(df_contacts)})")
 
-        df = pd.DataFrame(contactos, columns=["email"])
-        df["name"] = ""   # columnas extra para uniformidad
-        df["tags"] = ""
+    if len(df_contacts) > 0:
+        # Mostrar tabla con botones de eliminar
+        for idx, row in df_contacts.iterrows():
+            col1, col2, col3, col4 = st.columns([3, 3, 3, 1])
+            col1.write(row["name"] or "-")
+            col2.write(row["email"])
+            col3.write(row["tags"] or "-")
+            if col4.button("🗑️", key=f"del_{row['id']}"):
+                with get_conn() as conn:
+                    conn.execute("DELETE FROM contacts WHERE id=?", (row["id"],))
+                    conn.commit()
+                st.success(f"Contacto {row['email']} eliminado.")
+                st.experimental_rerun()
+    else:
+        st.info("No hay contactos registrados todavía.")
 
-    st.dataframe(df.head(20))
+    st.divider()
 
-    if st.button("Importar contactos"):
-        count = bulk_import_contacts(df)
-        st.success(f"Importados {count} contactos.")
-        # Actualiza la tabla después de importar
-        with get_conn() as conn:
-            st.session_state["contacts_df"] = pd.read_sql_query(
-                "SELECT * FROM contacts ORDER BY id DESC", conn
-            )
+    # --- Importar contactos ---
+    st.subheader("📤 Importar desde CSV o TXT")
+    st.caption("El archivo puede ser CSV (con columnas email, name, tags) o TXT con correos separados por coma, punto y coma, espacio o salto de línea.")
+    file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
+    if file:
+        if file.name.endswith(".csv"):
+            df = pd.read_csv(file)
+
+        elif file.name.endswith(".txt"):
+            import re
+            contenido = file.read().decode("utf-8")
+
+            # Dividir correos usando varias posibilidades
+            contactos = re.split(r"[,\s;]+", contenido.strip())
+            contactos = [c.strip() for c in contactos if c.strip()]
+            contactos = list(dict.fromkeys(contactos))  # quitar duplicados
+
+            df = pd.DataFrame(contactos, columns=["email"])
+            df["name"] = ""   # columnas extra para uniformidad
+            df["tags"] = ""
+
+        st.dataframe(df.head(20))
+
+        if st.button("Importar contactos"):
+            count = bulk_import_contacts(df)
+            st.success(f"Importados {count} contactos.")
             # Actualiza la tabla después de importar
             with get_conn() as conn:
                 st.session_state["contacts_df"] = pd.read_sql_query(
                     "SELECT * FROM contacts ORDER BY id DESC", conn
                 )
+            st.experimental_rerun()
 
-    st.divider()
-    df_contacts = st.session_state.get("contacts_df")
-    if df_contacts is None:
-        with get_conn() as conn:
-            df_contacts = pd.read_sql_query("SELECT * FROM contacts ORDER BY id DESC", conn)
-            st.session_state["contacts_df"] = df_contacts
-    st.subheader(f"📋 Listado de contactos ({len(df_contacts)})")
-    st.dataframe(df_contacts, use_container_width=True)
 
 
 def page_campaigns():
