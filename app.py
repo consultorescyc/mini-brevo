@@ -175,7 +175,7 @@ def page_contacts():
                     conn.execute("DELETE FROM contacts WHERE id=?", (row["id"],))
                     conn.commit()
                 st.success(f"Contacto {row['email']} eliminado.")
-                st.experimental_rerun()
+                st.rerun()
     else:
         st.info("No hay contactos registrados todavía.")
 
