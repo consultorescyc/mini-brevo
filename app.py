@@ -152,16 +152,37 @@ def page_contacts():
                             "SELECT * FROM contacts ORDER BY id DESC", conn
                         )
 
-    st.divider()
-    st.subheader("📤 Importar desde CSV")
-    st.caption("El CSV debe tener columnas: email, name (opcional), tags (opcional).")
-    file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
-    if file:
+   st.divider()
+st.subheader("📤 Importar desde CSV o TXT")
+st.caption("El archivo puede ser CSV (con columnas email, name, tags) o TXT con correos separados por coma, punto y coma, espacio o salto de línea.")
+file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
+if file:
+    if file.name.endswith(".csv"):
         df = pd.read_csv(file)
-        st.dataframe(df.head(20))
-        if st.button("Importar contactos"):
-            count = bulk_import_contacts(df)
-            st.success(f"Importados {count} contactos.")
+
+    elif file.name.endswith(".txt"):
+        import re
+        contenido = file.read().decode("utf-8")
+
+        # Dividir correos usando varias posibilidades
+        contactos = re.split(r"[,\s;]+", contenido.strip())
+        contactos = [c.strip() for c in contactos if c.strip()]
+        contactos = list(dict.fromkeys(contactos))  # quitar duplicados
+
+        df = pd.DataFrame(contactos, columns=["email"])
+        df["name"] = ""   # columnas extra para uniformidad
+        df["tags"] = ""
+
+    st.dataframe(df.head(20))
+
+    if st.button("Importar contactos"):
+        count = bulk_import_contacts(df)
+        st.success(f"Importados {count} contactos.")
+        # Actualiza la tabla después de importar
+        with get_conn() as conn:
+            st.session_state["contacts_df"] = pd.read_sql_query(
+                "SELECT * FROM contacts ORDER BY id DESC", conn
+            )
             # Actualiza la tabla después de importar
             with get_conn() as conn:
                 st.session_state["contacts_df"] = pd.read_sql_query(
