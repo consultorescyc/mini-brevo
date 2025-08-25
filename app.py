@@ -155,7 +155,7 @@ def page_contacts():
     st.divider()
     st.subheader("📤 Importar desde CSV")
     st.caption("El CSV debe tener columnas: email, name (opcional), tags (opcional).")
-    file = st.file_uploader("Subir CSV", type=["csv, txt"])
+    file = st.file_uploader("Subir CSV o TXT", type=["csv", "txt"])
     if file:
         df = pd.read_csv(file)
         st.dataframe(df.head(20))
