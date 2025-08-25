@@ -128,7 +128,7 @@ def send_email_smtp(to_email: str, subject: str, body_html: str):
 
 # -------------- UI --------------------
 def page_contacts():
-    st.header("👥 Contactos")
+    st.header("👥 Contactooooos")
     with st.expander("➕ Agregar contacto individual"):
         with st.form("add_contact_form"):
             col1, col2, col3 = st.columns([1, 1, 1])
